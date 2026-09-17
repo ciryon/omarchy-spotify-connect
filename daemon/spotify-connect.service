@@ -1,0 +1,12 @@
+[Unit]
+Description=Spotify Connect output switcher daemon
+After=pipewire-pulse.service network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.cargo/bin/spotify-connect daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
