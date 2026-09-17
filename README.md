@@ -63,6 +63,17 @@ control playback.
    omarchy plugin add https://github.com/ciryon/omarchy-spotify-connect --enable
    ```
 
+## Remove
+
+```bash
+omarchy plugin disable io.github.ciryon.spotify-output
+omarchy plugin remove io.github.ciryon.spotify-output
+systemctl --user disable --now spotify-connect
+rm ~/.config/systemd/user/spotify-connect.service
+cargo uninstall spotify-connect
+rm -rf ~/.local/state/spotify-connect    # saved Spotify credentials
+```
+
 ## CLI
 
 ```bash

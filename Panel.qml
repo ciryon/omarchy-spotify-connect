@@ -198,6 +198,7 @@ Panel {
 
               Text {
                 id: rowText
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
                 anchors.right: parent.right
