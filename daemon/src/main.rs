@@ -111,6 +111,7 @@ fn devices_json(cluster: &Cluster, own_id: &str) -> Value {
                     format!("{:?}", d.device_type.enum_value_or_default()).to_lowercase()
                 },
                 "active": *id == cluster.active_device_id,
+                "volume": (d.volume * 100).div_ceil(u32::from(u16::MAX)),
             })
         })
         .collect();
@@ -122,13 +123,14 @@ fn status_json(cluster: &Cluster, own_id: &str) -> Value {
     let active = devices_json(cluster, own_id)
         .as_array()
         .and_then(|l| l.iter().find(|d| d["active"] == true).cloned())
-        .map(|d| json!({ "id": d["id"], "name": d["name"] }));
+        .map(|d| json!({ "id": d["id"], "name": d["name"], "volume": d["volume"] }));
     json!({ "activeDevice": active })
 }
 
 async fn handle(line: &str, state: &State) -> Value {
     let req: Value = serde_json::from_str(line).unwrap_or_default();
-    let (session, from) = {
+    let cmd = req["cmd"].as_str().unwrap_or_default().to_string();
+    let (session, own_id, active) = {
         let s = state.lock().unwrap();
         if !s.authenticated {
             return json!({ "error": "not_authenticated" });
@@ -136,18 +138,52 @@ async fn handle(line: &str, state: &State) -> Value {
         let (Some(cluster), Some(session)) = (&s.cluster, &s.session) else {
             return json!({ "error": "unavailable" });
         };
-        match req["cmd"].as_str() {
-            Some("status") => return status_json(cluster, &s.own_id),
-            Some("devices") => return devices_json(cluster, &s.own_id),
-            Some("switch") => (session.clone(), cluster.active_device_id.clone()),
+        match cmd.as_str() {
+            "status" => return status_json(cluster, &s.own_id),
+            "devices" => return devices_json(cluster, &s.own_id),
+            "switch" | "volume" => (session.clone(), s.own_id.clone(), cluster.active_device_id.clone()),
             _ => return json!({ "error": "bad_request" }),
         }
     };
+
+    if cmd == "volume" {
+        let Some(percent) = req["value"].as_u64().filter(|v| *v <= 100) else {
+            return json!({ "error": "bad_request" });
+        };
+        if active.is_empty() {
+            return json!({ "error": "no_active_device" });
+        }
+        let raw = percent * u64::from(u16::MAX) / 100;
+        let body = json!({ "volume": raw }).to_string();
+        let endpoint = format!("/connect-state/v1/connect/volume/from/{own_id}/to/{active}");
+        let mut headers = HeaderMap::new();
+        match "application/json".parse() {
+            Ok(value) => headers.insert("content-type", value),
+            Err(e) => return json!({ "error": format!("bad_header: {e}") }),
+        };
+        return match session
+            .spclient()
+            .request(&Method::PUT, &endpoint, Some(headers), Some(body.as_bytes()))
+            .await
+        {
+            Ok(_) => {
+                if let Some(d) = state.lock().unwrap().cluster.as_mut().and_then(|c| c.device.get_mut(&active)) {
+                    d.volume = (raw as u32).min(u16::MAX.into());
+                }
+                json!({ "ok": true })
+            }
+            Err(e) => {
+                log::error!("set volume {percent} on {active} failed: {e}");
+                json!({ "error": "volume_failed" })
+            }
+        };
+    }
+
     let Some(target) = req["id"].as_str() else {
         return json!({ "error": "bad_request" });
     };
     // Nothing active: from == to lets Spotify resume the last session there.
-    let from = if from.is_empty() { target } else { &from };
+    let from = if active.is_empty() { target } else { &active };
     match session.spclient().transfer(from, target, None).await {
         Ok(_) => {
             if let Some(c) = state.lock().unwrap().cluster.as_mut() {
@@ -340,8 +376,15 @@ async fn main() {
         },
         [cmd @ ("status" | "devices")] => ctl(json!({ "cmd": cmd })),
         ["switch", id] => ctl(json!({ "cmd": "switch", "id": id })),
+        ["volume", v] => match v.parse::<u64>() {
+            Ok(v) if v <= 100 => ctl(json!({ "cmd": "volume", "value": v })),
+            _ => {
+                eprintln!("volume takes 0-100");
+                64
+            }
+        },
         _ => {
-            eprintln!("usage: spotify-connect daemon | login | status | devices | switch <device-id>");
+            eprintln!("usage: spotify-connect daemon | login | status | devices | switch <device-id> | volume <0-100>");
             64
         }
     };
@@ -369,16 +412,20 @@ mod tests {
         let mut lone = echo("echo2");
         lone.device_aliases.insert("".into(), alias("Bedroom"));
         c.device.insert("echo2".into(), lone);
+        if let Some(p) = c.device.get_mut("p") { p.volume = u16::MAX as u32 / 2; }
         c.active_device_id = "p".into();
         assert_eq!(
             devices_json(&c, "me"),
             json!([
-                { "id": "me", "name": "This computer", "type": "local", "active": false },
-                { "id": "echo2", "name": "Bedroom", "type": "unknown", "active": false },
-                { "id": "echo1_amzn_1", "name": "Kitchen", "type": "unknown", "active": false },
-                { "id": "p", "name": "Portable", "type": "speaker", "active": true },
+                { "id": "me", "name": "This computer", "type": "local", "active": false, "volume": 0 },
+                { "id": "echo2", "name": "Bedroom", "type": "unknown", "active": false, "volume": 0 },
+                { "id": "echo1_amzn_1", "name": "Kitchen", "type": "unknown", "active": false, "volume": 0 },
+                { "id": "p", "name": "Portable", "type": "speaker", "active": true, "volume": 50 },
             ])
         );
-        assert_eq!(status_json(&c, "me"), json!({ "activeDevice": { "id": "p", "name": "Portable" } }));
+        assert_eq!(
+            status_json(&c, "me"),
+            json!({ "activeDevice": { "id": "p", "name": "Portable", "volume": 50 } })
+        );
     }
 }

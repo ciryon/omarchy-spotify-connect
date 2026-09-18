@@ -80,6 +80,7 @@ rm -rf ~/.local/state/spotify-connect    # saved Spotify credentials
 spotify-connect status --json    # {"activeDevice":{"id":"…","name":"Portable"}}
 spotify-connect devices --json   # [{"id":"…","name":"This computer","type":"local","active":false}, …]
 spotify-connect switch <device-id>
+spotify-connect volume <0-100>   # volume of the active device
 ```
 
 | Exit code | Meaning |
@@ -87,6 +88,8 @@ spotify-connect switch <device-id>
 | 0 | OK |
 | 2 | Daemon not running or not yet connected |
 | 3 | Not logged in |
+
+`status` and `devices` also report each device's volume in percent.
 
 Logs: `journalctl --user -u spotify-connect -f`
 
@@ -98,6 +101,8 @@ Logs: `journalctl --user -u spotify-connect -f`
 | Right click | Refresh now |
 | `↑` / `↓` | Move through the list |
 | `Enter` | Move playback to the selected device |
+| `←` / `→` | Volume of the active device, in steps of 5 |
+| `+` / `-` | Same, for keyboards where the arrows are awkward |
 | `r` | Refresh |
 | `Esc` | Close |
 

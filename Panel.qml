@@ -18,6 +18,8 @@ Panel {
 
   property var devices: []
   property string activeName: ""
+  property int volume: 0
+  property bool hasActive: false
   property string lastError: ""
   property int cursor: -1
 
@@ -49,6 +51,8 @@ Panel {
     devices = list
     var active = list.find(function(d) { return d.active })
     activeName = active ? String(active.name) : ""
+    hasActive = !!active
+    if (active && !volumeProc.running && !volumeDebounce.running) volume = Number(active.volume)
     lastError = ""
     if (cursor >= list.length) cursor = list.length - 1
   }
@@ -60,6 +64,16 @@ Panel {
     devices = devices.map(function(d) { return Object.assign({}, d, { active: d.id === device.id }) })
     activeName = String(device.name)
     close()
+  }
+
+  // Spotify rejects a burst of volume commands, so send the last value only.
+  function setVolume(percent) {
+    volume = Math.max(0, Math.min(100, Math.round(percent)))
+    if (hasActive) volumeDebounce.restart()
+  }
+
+  function nudgeVolume(steps) {
+    if (hasActive) setVolume(volume + steps * 5)
   }
 
   function moveCursor(dy) {
@@ -90,6 +104,23 @@ Panel {
     command: []
     stdout: StdioCollector { id: out; waitForEnd: true }
     onExited: function(exitCode) { root.apply(exitCode, out.text) }
+  }
+
+  Timer {
+    id: volumeDebounce
+    interval: 200
+    onTriggered: {
+      if (volumeProc.running) { restart(); return }
+      volumeProc.command = root.cli(["volume", String(root.volume)])
+      volumeProc.running = true
+    }
+  }
+
+  Process {
+    id: volumeProc
+    running: false
+    command: []
+    onExited: function(exitCode) { if (exitCode !== 0) root.lastError = "Could not set volume" }
   }
 
   Process {
@@ -138,11 +169,18 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      onMoveRequested: function(dx, dy) { root.moveCursor(dy) }
+      onMoveRequested: function(dx, dy) {
+        if (dx !== 0) root.nudgeVolume(dx)
+        else root.moveCursor(dy)
+      }
       onActivateRequested: if (root.cursor >= 0) root.select(root.devices[root.cursor])
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
-      onTextKey: function(t) { if (t === "r" || t === "R") root.refresh() }
+      onTextKey: function(t) {
+        if (t === "r" || t === "R") root.refresh()
+        else if (t === "+" || t === "=") root.nudgeVolume(1)
+        else if (t === "-" || t === "_") root.nudgeVolume(-1)
+      }
 
       Flickable {
         id: flick
@@ -215,6 +253,50 @@ Panel {
               HoverHandler { onHoveredChanged: if (hovered) root.cursor = index }
 
               TapHandler { onTapped: root.select(modelData) }
+            }
+          }
+
+          Item {
+            width: parent.width
+            height: Style.space(12)
+          }
+
+          PanelSectionHeader {
+            text: "Volume"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Row {
+            width: parent.width
+            spacing: Style.space(8)
+
+            PanelSlider {
+              id: volumeSlider
+              bar: root.bar
+              width: parent.width - volumeLabel.width - Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              minimum: 0
+              maximum: 100
+              step: 5
+              integer: true
+              value: root.volume
+              enabled: root.hasActive
+              opacity: root.hasActive ? 1.0 : 0.5
+              onMoved: function(v) { root.setVolume(v) }
+              onReleased: function(v) { root.setVolume(v) }
+            }
+
+            Text {
+              id: volumeLabel
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
+              text: root.hasActive ? root.volume + "%" : "—"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              width: Style.space(38)
+              horizontalAlignment: Text.AlignRight
             }
           }
         }
