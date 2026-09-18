@@ -32,7 +32,10 @@ use librespot::{
         mixer::{self, MixerConfig},
         player::Player,
     },
-    protocol::connect::{Capabilities, Cluster, ClusterUpdate, Device, DeviceInfo, MemberType, PutStateReason, PutStateRequest},
+    protocol::{
+        connect::{Capabilities, Cluster, ClusterUpdate, Device, DeviceInfo, MemberType, PutStateReason, PutStateRequest},
+        devices::DeviceType as ProtoDeviceType,
+    },
 };
 use serde_json::{Value, json};
 use tokio::{
@@ -131,9 +134,41 @@ async fn handle(line: &str, state: &State) -> Value {
     let req: Value = serde_json::from_str(line).unwrap_or_default();
     let cmd = req["cmd"].as_str().unwrap_or_default().to_string();
     let (session, own_id, active) = {
-        let s = state.lock().unwrap();
+        let mut s = state.lock().unwrap();
         if !s.authenticated {
             return json!({ "error": "not_authenticated" });
+        }
+        if s.session.is_none() {
+            // Mock mode: no Spotify behind us, so apply commands to the fake cluster.
+            let own_id = s.own_id.clone();
+            let Some(cluster) = s.cluster.as_mut() else {
+                return json!({ "error": "unavailable" });
+            };
+            return match cmd.as_str() {
+                "status" => status_json(cluster, &own_id),
+                "devices" => devices_json(cluster, &own_id),
+                "switch" => match req["id"].as_str() {
+                    Some(id) if cluster.device.contains_key(id) => {
+                        cluster.active_device_id = id.to_string();
+                        json!({ "ok": true })
+                    }
+                    _ => json!({ "error": "bad_request" }),
+                },
+                "volume" => match req["value"].as_u64().filter(|v| *v <= 100) {
+                    Some(percent) => {
+                        let active = cluster.active_device_id.clone();
+                        match cluster.device.get_mut(&active) {
+                            Some(d) => {
+                                d.volume = (percent * u64::from(u16::MAX) / 100) as u32;
+                                json!({ "ok": true })
+                            }
+                            None => json!({ "error": "no_active_device" }),
+                        }
+                    }
+                    None => json!({ "error": "bad_request" }),
+                },
+                _ => json!({ "error": "bad_request" }),
+            };
         }
         let (Some(cluster), Some(session)) = (&s.cluster, &s.session) else {
             return json!({ "error": "unavailable" });
@@ -300,10 +335,46 @@ async fn receive(state: &State, creds: Credentials) -> Result<(), librespot::cor
     Ok(())
 }
 
-async fn daemon() {
+// Canned cluster for screenshots: `spotify-connect daemon --mock`, with the
+// real service stopped. Talks to nothing and keeps changes in memory.
+fn mock_cluster(own_id: &str) -> Cluster {
+    let mut cluster = Cluster::new();
+    let devices = [
+        (own_id, "Omarchy", ProtoDeviceType::COMPUTER, 40),
+        ("mock-kitchen", "Kitchen", ProtoDeviceType::SPEAKER, 35),
+        ("mock-living-room", "Living Room", ProtoDeviceType::SPEAKER, 55),
+        ("mock-bedroom", "Bedroom Speaker", ProtoDeviceType::SPEAKER, 20),
+        ("mock-office", "Office", ProtoDeviceType::SPEAKER, 45),
+    ];
+    for (id, name, device_type, percent) in devices {
+        cluster.device.insert(
+            id.to_string(),
+            DeviceInfo {
+                name: name.into(),
+                device_id: id.into(),
+                device_type: device_type.into(),
+                volume: percent * u32::from(u16::MAX) / 100,
+                ..Default::default()
+            },
+        );
+    }
+    cluster.active_device_id = "mock-living-room".into();
+    cluster
+}
+
+async fn daemon(mock: bool) {
     let state: State = Default::default();
     fs::create_dir_all(state_dir()).expect("create state dir");
     state.lock().unwrap().own_id = device_id();
+    if mock {
+        {
+            let mut s = state.lock().unwrap();
+            s.authenticated = true;
+            s.cluster = Some(mock_cluster(&s.own_id.clone()));
+        }
+        serve(state).await;
+        return;
+    }
     tokio::spawn(serve(state.clone()));
     loop {
         match cache().credentials() {
@@ -364,7 +435,11 @@ async fn main() {
     let args: Vec<String> = env::args().skip(1).filter(|a| a != "--json").collect();
     let code = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["daemon"] => {
-            daemon().await;
+            daemon(false).await;
+            0
+        }
+        ["daemon", "--mock"] => {
+            daemon(true).await;
             0
         }
         ["login"] => match login().await {
@@ -384,7 +459,7 @@ async fn main() {
             }
         },
         _ => {
-            eprintln!("usage: spotify-connect daemon | login | status | devices | switch <device-id> | volume <0-100>");
+            eprintln!("usage: spotify-connect daemon [--mock] | login | status | devices | switch <device-id> | volume <0-100>");
             64
         }
     };
@@ -394,12 +469,12 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use librespot::protocol::{connect::DeviceInfo, devices::{DeviceAlias, DeviceType as ProtoType}};
+    use librespot::protocol::devices::DeviceAlias;
 
     #[test]
     fn maps_cluster_to_devices() {
         let mut c = Cluster::new();
-        for (id, name, t) in [("me", "arch", ProtoType::COMPUTER), ("p", "Portable", ProtoType::SPEAKER)] {
+        for (id, name, t) in [("me", "arch", ProtoDeviceType::COMPUTER), ("p", "Portable", ProtoDeviceType::SPEAKER)] {
             let d = DeviceInfo { name: name.into(), device_type: t.into(), ..Default::default() };
             c.device.insert(id.into(), d);
         }

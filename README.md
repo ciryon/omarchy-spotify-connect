@@ -107,6 +107,19 @@ Logs: `journalctl --user -u spotify-connect -f`
 | `r` | Refresh |
 | `Esc` | Close |
 
+## Screenshots
+
+`preview.png` is taken with a mock daemon, so no real device names appear:
+
+```bash
+systemctl --user stop spotify-connect
+spotify-connect daemon --mock      # canned devices, talks to nothing
+# open the popup, take the screenshot, then Ctrl-C and:
+systemctl --user start spotify-connect
+```
+
+Switching and volume work in mock mode and stay in memory.
+
 ## Settings
 
 | Setting | Default | Meaning |
