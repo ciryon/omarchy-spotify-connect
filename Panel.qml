@@ -227,8 +227,20 @@ Panel {
           Repeater {
             model: root.devices
 
-            CursorSurface {
+            Column {
               width: column.width
+              spacing: Style.space(2)
+
+              PanelSectionHeader {
+                visible: modelData.type !== "local" && (index === 0 || root.devices[index - 1].type === "local")
+                text: "Speakers"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                topPadding: Style.space(8)
+              }
+
+            CursorSurface {
+              width: parent.width
               implicitHeight: rowText.implicitHeight + Style.space(12)
               hasCursor: root.cursor === index
               current: modelData.active
@@ -253,6 +265,7 @@ Panel {
               HoverHandler { onHoveredChanged: if (hovered) root.cursor = index }
 
               TapHandler { onTapped: root.select(modelData) }
+            }
             }
           }
 

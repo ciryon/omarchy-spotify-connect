@@ -1,12 +1,13 @@
 # Spotify Connect
 
 Shows the active Spotify Connect device in the Omarchy bar and moves playback
-between devices: Sonos, Echo, any other Connect target, and this computer.
+between devices: Sonos, Echo, any other Connect target, and this computer. The
+popup also sets the volume of whichever device is playing.
 
 It only picks the output. Use Spotify, Tuify or any other client to browse and
 control playback.
 
-![Spotify Connect popup listing Connect devices](preview.png)
+![Spotify Connect popup listing Connect devices with a volume slider](preview.png)
 
 ## How it works
 
@@ -19,9 +20,9 @@ control playback.
   - librespot does not expose the list it gets at startup. To fetch it, the
     daemon registers a second, hidden device once when it connects.
   - It serves that state on `$XDG_RUNTIME_DIR/spotify-connect.sock`.
-- **`Panel.qml`** polls `spotify-connect devices --json` and runs
-  `spotify-connect switch <id>` when you pick a device. It never talks to
-  Spotify itself.
+- **`Panel.qml`** polls `spotify-connect devices --json`, then runs
+  `spotify-connect switch <id>` or `spotify-connect volume <percent>` as you
+  use the popup. It never talks to Spotify itself.
 
 ## Requirements
 
@@ -77,8 +78,8 @@ rm -rf ~/.local/state/spotify-connect    # saved Spotify credentials
 ## CLI
 
 ```bash
-spotify-connect status --json    # {"activeDevice":{"id":"…","name":"Portable"}}
-spotify-connect devices --json   # [{"id":"…","name":"This computer","type":"local","active":false}, …]
+spotify-connect status --json    # {"activeDevice":{"id":"…","name":"Portable","volume":16}}
+spotify-connect devices --json   # [{"id":"…","name":"This computer","type":"local","active":false,"volume":50}, …]
 spotify-connect switch <device-id>
 spotify-connect volume <0-100>   # volume of the active device
 ```
@@ -89,8 +90,6 @@ spotify-connect volume <0-100>   # volume of the active device
 | 2 | Daemon not running or not yet connected |
 | 3 | Not logged in |
 
-`status` and `devices` also report each device's volume in percent.
-
 Logs: `journalctl --user -u spotify-connect -f`
 
 ## Usage
@@ -98,6 +97,8 @@ Logs: `journalctl --user -u spotify-connect -f`
 | Action | Result |
 |--------|--------|
 | Left click | Open or close the device list |
+| Click a device | Move playback there |
+| Drag the slider | Volume of the active device |
 | Right click | Refresh now |
 | `↑` / `↓` | Move through the list |
 | `Enter` | Move playback to the selected device |
